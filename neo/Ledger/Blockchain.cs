@@ -125,7 +125,14 @@ namespace Neo.Ledger
 
         public Store Store { get; }
         public MemoryPool MemPool { get; }
+
+        /// <summary>
+        /// 区块高度
+        /// </summary>
         public uint Height => currentSnapshot.Height;
+        /// <summary>
+        /// 区块头高度
+        /// </summary>
         public uint HeaderHeight => currentSnapshot.HeaderHeight;
         public UInt256 CurrentBlockHash => currentSnapshot.CurrentBlockHash;
         public UInt256 CurrentHeaderHash => currentSnapshot.CurrentHeaderHash;

@@ -37,13 +37,24 @@ namespace Neo.Network.P2P
         private readonly Dictionary<IPAddress, int> ConnectedAddresses = new Dictionary<IPAddress, int>();
         protected readonly ConcurrentDictionary<IActorRef, IPEndPoint> ConnectedPeers = new ConcurrentDictionary<IActorRef, IPEndPoint>();
         protected ImmutableHashSet<IPEndPoint> UnconnectedPeers = ImmutableHashSet<IPEndPoint>.Empty;
+
+        /// <summary>
+        /// 正在建立连接的节点（还没确认连接成功）
+        /// </summary>
         protected ImmutableHashSet<IPEndPoint> ConnectingPeers = ImmutableHashSet<IPEndPoint>.Empty;
         protected HashSet<IPAddress> TrustedIpAddresses { get; } = new HashSet<IPAddress>();
 
         public int ListenerPort { get; private set; }
         public int MaxConnectionsPerAddress { get; private set; } = 3;
+
+        /// <summary>
+        /// 保证的最小连接数
+        /// </summary>
         public int MinDesiredConnections { get; private set; } = DefaultMinDesiredConnections;
         public int MaxConnections { get; private set; } = DefaultMaxConnections;
+        /// <summary>
+        /// 只保留ip和端口号但不连接的节点最大数量
+        /// </summary>
         protected int UnconnectedMax { get; } = 1000;
         protected virtual int ConnectingMax
         {
@@ -111,6 +122,7 @@ namespace Neo.Network.P2P
                     AddPeers(peers.EndPoints);
                     break;
                 case Connect connect:
+                    // already abandon
                     ConnectToPeer(connect.EndPoint, connect.IsTrusted);
                     break;
                 case WsConnected ws:
