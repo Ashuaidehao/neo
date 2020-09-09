@@ -187,7 +187,123 @@ namespace Neo.SmartContract
             NotifyEventArgs notification = new NotifyEventArgs(engine.ScriptContainer, new UInt160(engine.CurrentContext.ScriptHash), state);
             Notify?.Invoke(this, notification);
             notifications.Add(notification);
+            Print(notification);
             return true;
+        }
+
+
+        private void Print(NotifyEventArgs e)
+        {
+            var tx = e.ScriptContainer as Transaction;
+            var array = (VMArray)e.State;
+            var eventName = array[0].GetString();
+            var items = new List<object>();
+
+            PrintArray(items, array, 1);
+            Console.WriteLine($"Notify:{eventName},{string.Join(",", items)}--[{tx?.Hash}]");
+        }
+
+        private void PrintArray(List<object> items, VMArray array, int startIndex = 0)
+        {
+            for (int i = startIndex; i < array.Count; i++)
+            {
+                var item = array[i];
+                if (item is VMArray subArray)
+                {
+                    PrintArray(items, subArray);
+                }
+                else
+                {
+                    var val = item.GetByteArray();
+                    if (val.Length == 20)
+                    {
+                        items.Add(new UInt160(val));
+                        continue;
+                    }
+                    if (IsTextUTF8(val))
+                    {
+                        items.Add($"({val.ToHexString()}|{item.GetBigInteger()}|{item.GetString()})");
+                    }
+                    else
+                    {
+                        items.Add($"({val.ToHexString()}|{item.GetBigInteger()})");
+                    }
+                }
+            }
+        }
+
+        public static bool IsTextUTF8(byte[] inputStream)
+        {
+            int encodingBytesCount = 0;
+            bool allTextsAreASCIIChars = true;
+
+            for (int i = 0; i < inputStream.Length; i++)
+            {
+                byte current = inputStream[i];
+
+                if ((current & 0x80) == 0x80)
+                {
+                    allTextsAreASCIIChars = false;
+                }
+                // First byte
+                if (encodingBytesCount == 0)
+                {
+                    if ((current & 0x80) == 0)
+                    {
+                        // ASCII chars, from 0x00-0x7F
+                        continue;
+                    }
+
+                    if ((current & 0xC0) == 0xC0)
+                    {
+                        encodingBytesCount = 1;
+                        current <<= 2;
+
+                        // More than two bytes used to encoding a unicode char.
+                        // Calculate the real length.
+                        while ((current & 0x80) == 0x80)
+                        {
+                            current <<= 1;
+                            encodingBytesCount++;
+                        }
+                    }
+                    else
+                    {
+                        // Invalid bits structure for UTF8 encoding rule.
+                        return false;
+                    }
+                }
+                else
+                {
+                    // Following bytes, must start with 10.
+                    if ((current & 0xC0) == 0x80)
+                    {
+                        encodingBytesCount--;
+                    }
+                    else
+                    {
+                        // Invalid bits structure for UTF8 encoding rule.
+                        return false;
+                    }
+                }
+            }
+
+            if (encodingBytesCount != 0)
+            {
+                // Invalid bits structure for UTF8 encoding rule.
+                // Wrong following bytes count.
+                return false;
+            }
+
+            // Although UTF8 supports encoding for ASCII chars, we regard as a input stream, whose contents are all ASCII as default encoding.
+            return true;
+        }
+
+        private void Print(LogEventArgs e)
+        {
+            var tx = (Transaction)e.ScriptContainer;
+
+            Console.WriteLine($"Log:{e.Message}--[{tx?.Hash}]");
         }
 
         protected bool Runtime_Log(ExecutionEngine engine)

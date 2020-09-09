@@ -1,8 +1,9 @@
+using System;
 using Neo.Ledger;
 using Neo.Network.P2P.Payloads;
 using Neo.Persistence;
 using Neo.VM;
-using Neo.VM.Types;
+using Array = Neo.VM.Types.Array;
 
 namespace Neo.SmartContract
 {
@@ -122,11 +123,16 @@ namespace Neo.SmartContract
                 }
                 return fee * 100000000L / ratio;
             }
+
             if (api_hash == "System.Storage.Put".ToInteropMethodHash() ||
                 api_hash == "System.Storage.PutEx".ToInteropMethodHash() ||
                 api_hash == "Neo.Storage.Put".ToInteropMethodHash() ||
                 api_hash == "AntShares.Storage.Put".ToInteropMethodHash())
-                return ((CurrentContext.EvaluationStack.Peek(1).GetByteArray().Length + CurrentContext.EvaluationStack.Peek(2).GetByteArray().Length - 1) / 1024 + 1) * 1000;
+            {
+                var fee= ((CurrentContext.EvaluationStack.Peek(1).GetByteArray().Length + CurrentContext.EvaluationStack.Peek(2).GetByteArray().Length - 1) / 1024 + 1) * 1000;
+                Console.WriteLine($"本次写入消耗gas:{fee}");
+                return fee;
+            }
             return 1;
         }
 
@@ -135,7 +141,11 @@ namespace Neo.SmartContract
             if (CurrentContext.InstructionPointer >= CurrentContext.Script.Length)
                 return true;
             gas_consumed = checked(gas_consumed + GetPrice() * ratio);
-            if (!testMode && gas_consumed > gas_amount) return false;
+            if (!testMode && gas_consumed > gas_amount)
+            {
+                Console.WriteLine("Gas Limit!!!!!!!!!!");
+                return false;
+            }
             if (!CheckDynamicInvoke()) return false;
             return true;
         }

@@ -5,6 +5,7 @@ using System.IO.Compression;
 using System.Linq;
 using System.Net;
 using System.Net.Security;
+using System.Numerics;
 using System.Security.Cryptography.X509Certificates;
 using System.Text;
 using System.Threading.Tasks;
@@ -118,7 +119,7 @@ namespace Neo.Network.RPC
 
         private JObject GetInvokeResult(byte[] script, IVerifiable checkWitnessHashes = null)
         {
-            using (ApplicationEngine engine = ApplicationEngine.Run(script, checkWitnessHashes, extraGAS: MaxGasInvoke))
+            using (ApplicationEngine engine = ApplicationEngine.Run(script, checkWitnessHashes,testMode:true, extraGAS: MaxGasInvoke))
             {
                 JObject json = new JObject();
                 json["script"] = script.ToHexString();
@@ -133,9 +134,18 @@ namespace Neo.Network.RPC
                     json["stack"] = "error: recursive reference";
                 }
 
+                if (engine.Service?.Notifications?.Any() == true)
+                {
+                    var notifies = engine.Service.Notifications.Select(n => n.State.ToParameter().ToJson()).ToArray();
+                    json["notifications"] = notifies;
+                }
                 return json;
             }
         }
+
+
+
+
 
         private static JObject GetRelayResult(RelayResultReason reason)
         {
@@ -327,6 +337,16 @@ namespace Neo.Network.RPC
                         UInt256 state_root = UInt256.Parse(_params[0].AsString());
                         byte[] proof_bytes = _params[1].AsString().HexToBytes();
                         return VerifyProof(state_root, proof_bytes);
+                    }
+                case "deploy":
+                    {
+                        var avmPath = _params[0].AsString();
+                        var owner = _params[1].AsString().ToScriptHash();
+                        var contractName = _params[2].AsString();
+                        var authorName = _params[3].AsString();
+                        var version = _params[4].AsString();
+
+                        return DeployContract(avmPath, owner, contractName, authorName, version);
                     }
                 default:
                     throw new RpcException(-32601, "Method not found");
@@ -852,6 +872,143 @@ namespace Neo.Network.RPC
                 json["value"] = value.ToHexString();
             }
             return json;
+        }
+
+
+        private JObject DeployContract(string avmPath, UInt160 address, string contractName = "autoContract", string contractAuthor = "autoDeployer", string contractVersion = "")
+        {
+            JObject json = new JObject();
+            try
+            {
+                byte[] script = File.ReadAllBytes(avmPath);
+                var scriptHash = script.ToScriptHash();
+                var tx = LoadScriptTransaction(script, contractName: contractName, contractAuthor: contractAuthor, contractVersion: contractVersion);
+
+                tx.Version = 1;
+                if (tx.Attributes == null) tx.Attributes = new TransactionAttribute[0];
+                if (tx.Inputs == null) tx.Inputs = new CoinReference[0];
+                if (tx.Outputs == null) tx.Outputs = new TransactionOutput[0];
+                if (tx.Witnesses == null) tx.Witnesses = new Witness[0];
+                using (ApplicationEngine engine = ApplicationEngine.Run(tx.Script, tx, null, true))
+                {
+                    StringBuilder sb = new StringBuilder();
+                    sb.AppendLine($"Script hash: {scriptHash.ToString()}");
+                    sb.AppendLine($"VM State: {engine.State}");
+                    sb.AppendLine($"Gas Consumed: {engine.GasConsumed}");
+                    sb.AppendLine(
+                        $"Evaluation Stack: {new JArray(engine.ResultStack.Select(p => p.ToParameter().ToJson()))}");
+                    Console.WriteLine(sb.ToString());
+                    if (engine.State.HasFlag(VMState.FAULT))
+                    {
+                        Console.WriteLine("Engine faulted.");
+                        json["success"] = false;
+                        json["error"] = "Engine faulted.";
+                        return json;
+                    }
+
+                    tx.Gas = engine.GasConsumed - Fixed8.FromDecimal(10);
+                }
+                if (tx.Gas < Fixed8.Zero) tx.Gas = Fixed8.Zero;
+                tx.Gas = tx.Gas.Ceiling();
+
+                tx = DecorateInvocationTransaction(tx);
+
+                var result = SignAndSendTx(tx);
+                json["success"] = result;
+                json["contractHash"] = scriptHash.ToString();
+                json["txHash"] = tx.Hash.ToString();
+            }
+            catch (Exception e)
+            {
+                Console.WriteLine(e);
+                json["success"] = false;
+                json["error"] = e.ToString();
+            }
+            return json;
+        }
+
+
+        public bool SignAndSendTx(InvocationTransaction tx)
+        {
+            ContractParametersContext context;
+            try
+            {
+                context = new ContractParametersContext(tx);
+            }
+            catch (InvalidOperationException ex)
+            {
+                Console.WriteLine($"Error creating contract params: {ex}");
+                throw;
+            }
+            Wallet.Sign(context);
+            string msg;
+            if (context.Completed)
+            {
+                tx.Witnesses = context.GetWitnesses();
+                Wallet.ApplyTransaction(tx);
+
+                system.LocalNode.Tell(new LocalNode.Relay { Inventory = tx });
+
+                msg = $"Signed and relayed transaction with hash={tx.Hash}";
+                Console.WriteLine(msg);
+                return true;
+            }
+
+            msg = $"Failed sending transaction with hash={tx.Hash}";
+            Console.WriteLine(msg);
+            return true;
+        }
+
+        public InvocationTransaction DecorateInvocationTransaction(InvocationTransaction tx)
+        {
+            Fixed8 fee = Fixed8.Zero;
+
+            if (tx.Size > 1024)
+            {
+                fee = Fixed8.FromDecimal(0.001m);
+                fee += Fixed8.FromDecimal(tx.Size * 0.00001m);
+            }
+
+            return Wallet.MakeTransaction(new InvocationTransaction
+            {
+                Version = tx.Version,
+                Script = tx.Script,
+                Gas = tx.Gas,
+                Attributes = tx.Attributes,
+                Inputs = tx.Inputs,
+                Outputs = tx.Outputs
+            }, fee: fee);
+        }
+        public InvocationTransaction LoadScriptTransaction(
+            byte[] script, string paramTypes = "0710", string returnTypeHexString = "10",
+            bool hasStorage = true, bool hasDynamicInvoke = true, bool isPayable = true,
+            string contractName = "", string contractVersion = "", string contractAuthor = "",
+            string contractEmail = "", string contractDescription = "")
+        {
+            if (script.Length >= Transaction.MaxTransactionSize)
+            {
+                throw new ArgumentException($"script too large!({script.Length})");
+            }
+
+            // See ContractParameterType Enum
+            byte[] parameterList = paramTypes.HexToBytes();
+            ContractParameterType returnType = returnTypeHexString.HexToBytes()
+                                                   .Select(p => (ContractParameterType?)p).FirstOrDefault() ?? ContractParameterType.Void;
+            ContractPropertyState properties = ContractPropertyState.NoProperty;
+            if (hasStorage) properties |= ContractPropertyState.HasStorage;
+            if (hasDynamicInvoke) properties |= ContractPropertyState.HasDynamicInvoke;
+            if (isPayable) properties |= ContractPropertyState.Payable;
+            using (ScriptBuilder sb = new ScriptBuilder())
+            {
+                //var scriptHash = script.ToScriptHash();
+
+                sb.EmitSysCall("Neo.Contract.Create", script, parameterList, returnType, properties,
+                    contractName, contractVersion, contractAuthor, contractEmail, contractDescription);
+                return new InvocationTransaction
+                {
+                    Script = sb.ToArray()
+                };
+            }
         }
     }
 }
