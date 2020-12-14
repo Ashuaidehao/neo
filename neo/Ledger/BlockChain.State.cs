@@ -13,10 +13,11 @@ namespace Neo.Ledger
     public sealed partial class Blockchain : UntypedActor
     {
         public class ImportRoots { public IEnumerable<StateRoot> Roots; }
-        public long StateHeight => currentSnapshot.StateHeight;
-        private static uint StateRootEnableIndex => ProtocolSettings.Default.StateRootEnableIndex;
         private readonly Dictionary<uint, StateRoot> stateRootCache = new Dictionary<uint, StateRoot>();
         private readonly uint MaxRootCacheCount = 1000;
+        public long StateHeight => currentSnapshot.StateHeight;
+        public uint ExpectStateRootIndex => (uint)Math.Max(ProtocolSettings.Default.StateRootEnableIndex, StateHeight + 1);
+
 
         public StateRootState GetStateRoot(UInt256 block_hash)
         {
@@ -26,7 +27,7 @@ namespace Neo.Ledger
 
         public StateRootState GetStateRoot(uint index)
         {
-            return currentSnapshot.StateRoots.TryGet(index);
+            return Store.GetStateRoots().TryGet(index);
         }
 
         public bool GetStateProof(UInt256 root, StorageKey skey, out HashSet<byte[]> proof)
@@ -45,29 +46,26 @@ namespace Neo.Ledger
 
         private RelayResultReason OnNewStateRoot(StateRoot stateRoot)
         {
-            var expectedStateRootIndex = Math.Max(StateRootEnableIndex, StateHeight + 1);
-            if (stateRoot.Index < expectedStateRootIndex) return RelayResultReason.Invalid;
-            if (expectedStateRootIndex + MaxRootCacheCount < stateRoot.Index) return RelayResultReason.OutOfMemory;
+            if (stateRoot.Index < ExpectStateRootIndex) return RelayResultReason.AlreadyExists;
+            if (ExpectStateRootIndex + MaxRootCacheCount < stateRoot.Index) return RelayResultReason.OutOfMemory;
             if (stateRootCache.ContainsKey(stateRoot.Index)) return RelayResultReason.AlreadyExists;
-            if (stateRoot.Index > expectedStateRootIndex)
+            if (stateRoot.Index > ExpectStateRootIndex)
             {
                 stateRootCache.Add(stateRoot.Index, stateRoot);
                 return RelayResultReason.Succeed;
             }
-            using (Snapshot snapshot = GetSnapshot())
+
+            while (stateRoot.Index <= Height)
             {
-                while (stateRoot.Index <= Height)
+                stateRootCache.Remove(stateRoot.Index);
+                if (!stateRoot.Verify(currentSnapshot)) break;
+                if (PersistCnStateRoot(stateRoot) == StateRootVerifyFlag.Invalid)
+                    break;
+                if (stateRoot.Index + 3 > HeaderHeight)
                 {
-                    stateRootCache.Remove(stateRoot.Index);
-                    if (!stateRoot.Verify(currentSnapshot)) break;
-                    if (PersistCnStateRoot(stateRoot) == StateRootVerifyFlag.Invalid)
-                        break;
-                    if (stateRoot.Index + 3 > HeaderHeight)
-                    {
-                        system.LocalNode.Tell(new LocalNode.SendDirectly { Inventory = stateRoot });
-                    }
-                    if (!stateRootCache.TryGetValue(stateRoot.Index + 1, out stateRoot)) break;
+                    system.LocalNode.Tell(new LocalNode.SendDirectly { Inventory = stateRoot });
                 }
+                if (!stateRootCache.TryGetValue(stateRoot.Index + 1, out stateRoot)) break;
             }
             return RelayResultReason.Succeed;
         }
@@ -76,6 +74,7 @@ namespace Neo.Ledger
         {
             foreach (var state_root in sts)
             {
+                if (state_root.Index < ExpectStateRootIndex) continue;
                 var result = OnNewStateRoot(state_root);
                 if (result != RelayResultReason.Succeed)
                     break;
@@ -87,8 +86,8 @@ namespace Neo.Ledger
         {
             foreach (StateRoot stateRoot in roots)
             {
-                if (stateRoot.Index < Math.Max(StateHeight, StateRootEnableIndex)) continue;
-                if (stateRoot.Index != Math.Max(StateHeight + 1, StateRootEnableIndex))
+                if (stateRoot.Index < ExpectStateRootIndex) continue;
+                if (stateRoot.Index != ExpectStateRootIndex)
                     throw new InvalidOperationException();
 
                 if (PersistCnStateRoot(stateRoot) == StateRootVerifyFlag.Invalid)
@@ -153,10 +152,9 @@ namespace Neo.Ledger
 
         private void CheckRootOnBlockPersistCompleted()
         {
-            var index = (uint)Math.Max(StateHeight + 1, StateRootEnableIndex);
-            if (GetStateRoot(index)?.Flag == StateRootVerifyFlag.Unverified && stateRootCache.TryGetValue(index, out StateRoot state_root))
+            if (GetStateRoot(ExpectStateRootIndex)?.Flag == StateRootVerifyFlag.Unverified && stateRootCache.TryGetValue(ExpectStateRootIndex, out StateRoot state_root))
             {
-                stateRootCache.Remove(index);
+                stateRootCache.Remove(ExpectStateRootIndex);
                 Self.Tell(state_root);
             }
         }

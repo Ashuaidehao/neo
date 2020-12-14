@@ -12,6 +12,7 @@ using Neo.SmartContract;
 using Neo.Trie.MPT;
 using Neo.VM;
 using System;
+using System.Collections.Concurrent;
 using System.Collections.Generic;
 using System.Linq;
 using System.Threading;
@@ -33,6 +34,7 @@ namespace Neo.Ledger
         public static readonly uint[] GenerationAmount = { 8, 7, 6, 5, 4, 3, 2, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1, 1 };
         public static readonly TimeSpan TimePerBlock = TimeSpan.FromSeconds(SecondsPerBlock);
         public static readonly ECPoint[] StandbyValidators = ProtocolSettings.Default.StandbyValidators.OfType<string>().Select(p => ECPoint.DecodePoint(p.HexToBytes(), ECCurve.Secp256r1)).ToArray();
+        public static readonly uint FreeGasChangeHeight = ProtocolSettings.Default.FreeGasChangeHeight;
 
 #pragma warning disable CS0612
         public static readonly RegisterTransaction GoverningToken = new RegisterTransaction
@@ -119,7 +121,7 @@ namespace Neo.Ledger
         private readonly NeoSystem system;
         private readonly List<UInt256> header_index = new List<UInt256>();
         private uint stored_header_count = 0;
-        private readonly Dictionary<UInt256, Block> block_cache = new Dictionary<UInt256, Block>();
+        private readonly ConcurrentDictionary<UInt256, Block> block_cache = new ConcurrentDictionary<UInt256, Block>();
         private readonly Dictionary<uint, LinkedList<Block>> block_cache_unverified = new Dictionary<uint, LinkedList<Block>>();
         internal readonly RelayCache RelayCache = new RelayCache(100);
         private Snapshot currentSnapshot;
@@ -339,7 +341,7 @@ namespace Neo.Ledger
             }
             else
             {
-                block_cache.Add(block.Hash, block);
+                block_cache.TryAdd(block.Hash, block);
                 if (block.Index + 100 >= header_index.Count)
                     system.LocalNode.Tell(new LocalNode.RelayDirectly { Inventory = block });
                 if (block.Index == header_index.Count)
@@ -399,27 +401,33 @@ namespace Neo.Ledger
 
         private RelayResultReason OnNewTransaction(Transaction transaction)
         {
-            if (transaction.Type == TransactionType.MinerTransaction)
-                return RelayResultReason.Invalid;
-            if (ContainsTransaction(transaction.Hash))
-                return RelayResultReason.AlreadyExists;
-            if (!MemPool.CanTransactionFitInPool(transaction))
-                return RelayResultReason.OutOfMemory;
-            if (!transaction.Verify(currentSnapshot, MemPool.GetVerifiedTransactions()))
-                return RelayResultReason.Invalid;
-            if (!Plugin.CheckPolicy(transaction))
-                return RelayResultReason.PolicyFail;
+            try
+            {
+                if (transaction.Type == TransactionType.MinerTransaction)
+                    return RelayResultReason.Invalid;
+                if (ContainsTransaction(transaction.Hash))
+                    return RelayResultReason.AlreadyExists;
+                if (!MemPool.CanTransactionFitInPool(transaction))
+                    return RelayResultReason.OutOfMemory;
+                if (!transaction.Verify(currentSnapshot, MemPool.GetVerifiedTransactions()))
+                    return RelayResultReason.Invalid;
+                if (!Plugin.CheckPolicy(transaction))
+                    return RelayResultReason.PolicyFail;
 
-            if (!MemPool.TryAdd(transaction.Hash, transaction))
-                return RelayResultReason.OutOfMemory;
-
+                if (!MemPool.TryAdd(transaction.Hash, transaction))
+                    return RelayResultReason.OutOfMemory;
+            }
+            catch
+            {
+                return RelayResultReason.Error;
+            }
             system.LocalNode.Tell(new LocalNode.RelayDirectly { Inventory = transaction });
             return RelayResultReason.Succeed;
         }
 
         private void OnPersistCompleted(Block block)
         {
-            block_cache.Remove(block.Hash);
+            block_cache.TryRemove(block.Hash, out _);
             MemPool.UpdatePoolForBlockPersisted(block, currentSnapshot);
             Context.System.EventStream.Publish(new PersistCompleted { Block = block });
             CheckRootOnBlockPersistCompleted();
