@@ -130,20 +130,20 @@ namespace Neo.SmartContract
             ExecutionContext context_new = CallContractInternal(hash, method, CallFlags.All, false, args);
             ExecutionContextState state = context_new.GetState<ExecutionContextState>();
             state.CallingScriptHash = callingScriptHash;
-            while (CurrentContext != context_current)
-                StepOut();
+            //while (CurrentContext != context_current)
+            //    StepOut();
         }
 
-        internal T CallFromNativeContract<T>(UInt160 callingScriptHash, UInt160 hash, string method, params StackItem[] args)
-        {
-            ExecutionContext context_current = CurrentContext;
-            ExecutionContext context_new = CallContractInternal(hash, method, CallFlags.All, true, args);
-            ExecutionContextState state = context_new.GetState<ExecutionContextState>();
-            state.CallingScriptHash = callingScriptHash;
-            while (CurrentContext != context_current)
-                StepOut();
-            return (T)Convert(Pop(), new InteropParameterDescriptor(typeof(T)));
-        }
+        //internal T CallFromNativeContract<T>(UInt160 callingScriptHash, UInt160 hash, string method, params StackItem[] args)
+        //{
+        //    ExecutionContext context_current = CurrentContext;
+        //    ExecutionContext context_new = CallContractInternal(hash, method, CallFlags.All, true, args);
+        //    ExecutionContextState state = context_new.GetState<ExecutionContextState>();
+        //    state.CallingScriptHash = callingScriptHash;
+        //    //while (CurrentContext != context_current)
+        //    //    StepOut();
+        //    return (T)Convert(Pop(), new InteropParameterDescriptor(typeof(T)));
+        //}
 
         public static ApplicationEngine Create(TriggerType trigger, IVerifiable container, DataCache snapshot, Block persistingBlock = null, ProtocolSettings settings = null, long gas = TestModeGas)
         {
