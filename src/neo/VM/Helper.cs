@@ -16,6 +16,7 @@ namespace Neo.VM
     public static class Helper
     {
         public static ScriptBuilder CreateArray<T>(this ScriptBuilder sb, IReadOnlyList<T> list = null)
+
         {
             if (list is null || list.Count == 0)
                 return sb.Emit(OpCode.NEWARRAY0);
@@ -219,7 +220,7 @@ namespace Neo.VM
                     break;
                 case Buffer _:
                 case ByteString _:
-                    json["value"] = Convert.ToBase64String(item.GetSpan());
+                    json["value"] = item.GetSpan().ToHexString();
                     break;
                 case Integer integer:
                     json["value"] = integer.GetInteger().ToString();

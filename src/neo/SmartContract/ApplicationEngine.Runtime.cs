@@ -8,6 +8,8 @@ using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using Array = Neo.VM.Types.Array;
+using Boolean = Neo.VM.Types.Boolean;
+using Buffer = Neo.VM.Types.Buffer;
 
 namespace Neo.SmartContract
 {
@@ -144,6 +146,11 @@ namespace Neo.SmartContract
             Notify?.Invoke(this, notification);
             notifications ??= new List<NotifyEventArgs>();
             notifications.Add(notification);
+
+            if (Trigger == TriggerType.Application)
+            {
+                Print(eventName, notification);
+            }
         }
 
         protected internal NotifyEventArgs[] GetNotifications(UInt160 hash)
@@ -154,6 +161,150 @@ namespace Neo.SmartContract
             NotifyEventArgs[] array = notifications.ToArray();
             if (array.Length > Limits.MaxStackSize) throw new InvalidOperationException();
             return array;
+        }
+
+
+        private void Print(string eventName, NotifyEventArgs e)
+        {
+            var tx = e.ScriptContainer as Transaction;
+            var array = e.State;
+            var items = new List<object>();
+
+            PrintArray(items, array);
+            Console.WriteLine($"Notify:{eventName},{string.Join(",", items)}--[{tx?.Hash}]");
+        }
+
+        private void PrintArray(List<object> items, Array array, int startIndex = 0)
+        {
+            for (int i = startIndex; i < array.Count; i++)
+            {
+                var item = array[i];
+                switch (item)
+                {
+                    case Array subArray:
+                        PrintArray(items, subArray);
+                        break;
+                    case Buffer:
+                    case ByteString:
+                        var val = item.GetSpan().ToArray();
+                        if (val.Length == 20)
+                        {
+                            items.Add(new UInt160(val));
+                            continue;
+                        }
+                        if (IsTextUTF8(val))
+                        {
+                            items.Add($"({val.ToHexString()}|{item.GetString()})");
+                        }
+                        else
+                        {
+                            items.Add($"({val.ToHexString()})");
+                        }
+                        break;
+                    case Integer:
+                        items.Add($"{item.GetInteger()}");
+                        break;
+                    case Boolean:
+                        items.Add($"{item.GetBoolean()}");
+                        break;
+                    case Null:
+                        items.Add($"null");
+                        break;
+                    default:
+                        items.Add($"unknown:{item}");
+                        break;
+
+                }
+                //if (item is Array subArray)
+                //{
+                //    PrintArray(items, subArray);
+                //}
+                //else
+                //{
+                //    var val = item.GetSpan().ToArray();
+                //    if (val.Length == 20)
+                //    {
+                //        items.Add(new UInt160(val));
+                //        continue;
+                //    }
+                //    if (IsTextUTF8(val))
+                //    {
+                //        items.Add($"({val.ToHexString()}|{item.GetInteger()}|{item.GetString()})");
+                //    }
+                //    else
+                //    {
+                //        items.Add($"({val.ToHexString()}|{item.GetInteger()})");
+                //    }
+                //}
+            }
+        }
+
+
+        public static bool IsTextUTF8(byte[] inputStream)
+        {
+            int encodingBytesCount = 0;
+            bool allTextsAreASCIIChars = true;
+
+            for (int i = 0; i < inputStream.Length; i++)
+            {
+                byte current = inputStream[i];
+
+                if ((current & 0x80) == 0x80)
+                {
+                    allTextsAreASCIIChars = false;
+                }
+                // First byte
+                if (encodingBytesCount == 0)
+                {
+                    if ((current & 0x80) == 0)
+                    {
+                        // ASCII chars, from 0x00-0x7F
+                        continue;
+                    }
+
+                    if ((current & 0xC0) == 0xC0)
+                    {
+                        encodingBytesCount = 1;
+                        current <<= 2;
+
+                        // More than two bytes used to encoding a unicode char.
+                        // Calculate the real length.
+                        while ((current & 0x80) == 0x80)
+                        {
+                            current <<= 1;
+                            encodingBytesCount++;
+                        }
+                    }
+                    else
+                    {
+                        // Invalid bits structure for UTF8 encoding rule.
+                        return false;
+                    }
+                }
+                else
+                {
+                    // Following bytes, must start with 10.
+                    if ((current & 0xC0) == 0x80)
+                    {
+                        encodingBytesCount--;
+                    }
+                    else
+                    {
+                        // Invalid bits structure for UTF8 encoding rule.
+                        return false;
+                    }
+                }
+            }
+
+            if (encodingBytesCount != 0)
+            {
+                // Invalid bits structure for UTF8 encoding rule.
+                // Wrong following bytes count.
+                return false;
+            }
+
+            // Although UTF8 supports encoding for ASCII chars, we regard as a input stream, whose contents are all ASCII as default encoding.
+            return true;
         }
     }
 }

@@ -240,34 +240,43 @@ namespace Neo.SmartContract
 
         protected internal object Convert(StackItem item, InteropParameterDescriptor descriptor)
         {
-            if (descriptor.IsArray)
+            try
             {
-                Array av;
-                if (item is VMArray array)
+                if (descriptor.IsArray)
                 {
-                    av = Array.CreateInstance(descriptor.Type.GetElementType(), array.Count);
-                    for (int i = 0; i < av.Length; i++)
-                        av.SetValue(descriptor.Converter(array[i]), i);
+                    Array av;
+                    if (item is VMArray array)
+                    {
+                        av = Array.CreateInstance(descriptor.Type.GetElementType(), array.Count);
+                        for (int i = 0; i < av.Length; i++)
+                            av.SetValue(descriptor.Converter(array[i]), i);
+                    }
+                    else
+                    {
+                        int count = (int)item.GetInteger();
+                        if (count > Limits.MaxStackSize) throw new InvalidOperationException();
+                        av = Array.CreateInstance(descriptor.Type.GetElementType(), count);
+                        for (int i = 0; i < av.Length; i++)
+                            av.SetValue(descriptor.Converter(Pop()), i);
+                    }
+                    return av;
                 }
                 else
                 {
-                    int count = (int)item.GetInteger();
-                    if (count > Limits.MaxStackSize) throw new InvalidOperationException();
-                    av = Array.CreateInstance(descriptor.Type.GetElementType(), count);
-                    for (int i = 0; i < av.Length; i++)
-                        av.SetValue(descriptor.Converter(Pop()), i);
+                    object value = descriptor.Converter(item);
+                    if (descriptor.IsEnum)
+                        value = Enum.ToObject(descriptor.Type, value);
+                    else if (descriptor.IsInterface)
+                        value = ((InteropInterface)value).GetInterface<object>();
+                    return value;
                 }
-                return av;
             }
-            else
+            catch (Exception e)
             {
-                object value = descriptor.Converter(item);
-                if (descriptor.IsEnum)
-                    value = Enum.ToObject(descriptor.Type, value);
-                else if (descriptor.IsInterface)
-                    value = ((InteropInterface)value).GetInterface<object>();
-                return value;
+                Console.WriteLine(e);
+                throw;
             }
+          
         }
 
         public override void Dispose()
