@@ -4,7 +4,6 @@ using Neo.IO;
 using Neo.Network.P2P.Payloads;
 using Neo.Persistence;
 using Neo.SmartContract.Manifest;
-using Neo.VM;
 using Neo.VM.Types;
 using System;
 using System.Collections.Generic;
@@ -13,6 +12,9 @@ using System.Numerics;
 
 namespace Neo.SmartContract.Native
 {
+    /// <summary>
+    /// A native contract used to manage all deployed smart contracts.
+    /// </summary>
     public sealed class ContractManagement : NativeContract
     {
         private const byte Prefix_MinimumDeploymentFee = 20;
@@ -62,15 +64,6 @@ namespace Neo.SmartContract.Native
             };
 
             Manifest.Abi.Events = events.ToArray();
-        }
-
-        private static void Check(byte[] script, ContractAbi abi)
-        {
-            Script s = new Script(script, true);
-            foreach (ContractMethodDescriptor method in abi.Methods)
-                s.GetInstruction(method.Offset);
-            abi.GetMethod(string.Empty, 0); // Trigger the construction of ContractAbi.methodDictionary to check the uniqueness of the method names.
-            _ = abi.Events.ToDictionary(p => p.Name); // Check the uniqueness of the event names.
         }
 
         private int GetNextAvailableId(DataCache snapshot)
@@ -128,12 +121,23 @@ namespace Neo.SmartContract.Native
             engine.Snapshot.GetAndChange(CreateStorageKey(Prefix_MinimumDeploymentFee)).Set(value);
         }
 
+        /// <summary>
+        /// Gets the deployed contract with the specified hash.
+        /// </summary>
+        /// <param name="snapshot">The snapshot used to read data.</param>
+        /// <param name="hash">The hash of the deployed contract.</param>
+        /// <returns>The deployed contract.</returns>
         [ContractMethod(CpuFee = 1 << 15, RequiredCallFlags = CallFlags.ReadStates)]
         public ContractState GetContract(DataCache snapshot, UInt160 hash)
         {
             return snapshot.TryGet(CreateStorageKey(Prefix_Contract).Add(hash))?.GetInteroperable<ContractState>();
         }
 
+        /// <summary>
+        /// Gets all deployed contracts.
+        /// </summary>
+        /// <param name="snapshot">The snapshot used to read data.</param>
+        /// <returns>The deployed contracts.</returns>
         public IEnumerable<ContractState> ListContracts(DataCache snapshot)
         {
             byte[] listContractsPrefix = CreateStorageKey(Prefix_Contract).ToArray();
@@ -163,12 +167,12 @@ namespace Neo.SmartContract.Native
 
             NefFile nef = nefFile.AsSerializable<NefFile>();
             ContractManifest parsedManifest = ContractManifest.Parse(manifest);
-            Check(nef.Script, parsedManifest.Abi);
+            Helper.Check(nef.Script, parsedManifest.Abi);
             UInt160 hash = Helper.GetContractHash(tx.Sender, nef.CheckSum, parsedManifest.Name);
             StorageKey key = CreateStorageKey(Prefix_Contract).Add(hash);
             if (engine.Snapshot.Contains(key))
                 throw new InvalidOperationException($"Contract Already Exists: {hash}");
-            ContractState contract = new ContractState
+            ContractState contract = new()
             {
                 Id = GetNextAvailableId(engine.Snapshot),
                 UpdateCounter = 0,
@@ -221,7 +225,7 @@ namespace Neo.SmartContract.Native
                     throw new InvalidOperationException($"Invalid Manifest Hash: {contract.Hash}");
                 contract.Manifest = manifest_new;
             }
-            Check(contract.Nef.Script, contract.Manifest.Abi);
+            Helper.Check(contract.Nef.Script, contract.Manifest.Abi);
             contract.UpdateCounter++; // Increase update counter
             return OnDeploy(engine, contract, data, true);
         }

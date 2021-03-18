@@ -105,29 +105,6 @@ namespace Neo.UnitTests.SmartContract
         }
 
         [TestMethod]
-        public void TestAccount_IsStandard()
-        {
-            var engine = GetEngine(false, true);
-            var hash = new byte[] { 0x01, 0x01, 0x01 ,0x01, 0x01,
-                                    0x01, 0x01, 0x01, 0x01, 0x01,
-                                    0x01, 0x01, 0x01, 0x01, 0x01,
-                                    0x01, 0x01, 0x01, 0x01, 0x01 };
-            engine.IsStandardContract(new UInt160(hash)).Should().BeFalse();
-
-            var snapshot = TestBlockchain.GetTestSnapshot();
-            var state = TestUtils.GetContract();
-            snapshot.AddContract(state.Hash, state);
-            engine = ApplicationEngine.Create(TriggerType.Application, null, snapshot);
-            engine.LoadScript(new byte[] { 0x01 });
-            engine.IsStandardContract(state.Hash).Should().BeFalse();
-
-            state.Nef.Script = Contract.CreateSignatureRedeemScript(ProtocolSettings.Default.StandbyValidators[0]);
-            engine = ApplicationEngine.Create(TriggerType.Application, null, snapshot);
-            engine.LoadScript(new byte[] { 0x01 });
-            engine.IsStandardContract(state.Hash).Should().BeTrue();
-        }
-
-        [TestMethod]
         public void TestContract_Create()
         {
             var snapshot = TestBlockchain.GetTestSnapshot();
@@ -283,25 +260,23 @@ namespace Neo.UnitTests.SmartContract
         [TestMethod]
         public void TestIterator_Next()
         {
-            var engine = GetEngine();
             var arr = new VMArray {
                 new byte[]{ 0x01 },
                 new byte[]{ 0x02 }
             };
-            engine.IteratorNext(new ArrayWrapper(arr)).Should().BeTrue();
+            ApplicationEngine.IteratorNext(new ArrayWrapper(arr)).Should().BeTrue();
         }
 
         [TestMethod]
         public void TestIterator_Value()
         {
-            var engine = GetEngine();
             var arr = new VMArray {
                 new byte[]{ 0x01 },
                 new byte[]{ 0x02 }
             };
             var wrapper = new ArrayWrapper(arr);
             wrapper.Next();
-            engine.IteratorValue(wrapper).GetSpan().ToHexString().Should().Be(new byte[] { 0x01 }.ToHexString());
+            ApplicationEngine.IteratorValue(wrapper).GetSpan().ToHexString().Should().Be(new byte[] { 0x01 }.ToHexString());
         }
 
         [TestMethod]
