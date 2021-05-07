@@ -40,7 +40,7 @@ namespace Neo.SmartContract
 
         private static IApplicationEngineProvider applicationEngineProvider;
         private static Dictionary<uint, InteropDescriptor> services;
-        private readonly long gas_amount;
+        private long gas_amount;
         private List<NotifyEventArgs> notifications;
         private List<IDisposable> disposables;
         private readonly Dictionary<UInt160, int> invocationCounter = new();
@@ -145,6 +145,14 @@ namespace Neo.SmartContract
             GasConsumed = checked(GasConsumed + gas);
             if (GasConsumed > gas_amount)
                 throw new InvalidOperationException("Insufficient GAS.");
+        }
+
+        internal void Refuel(long gas)
+        {
+            checked
+            {
+                gas_amount += gas;
+            }
         }
 
         protected override void OnFault(Exception ex)
@@ -365,43 +373,35 @@ namespace Neo.SmartContract
         /// <returns>The converted <see cref="object"/>.</returns>
         protected internal object Convert(StackItem item, InteropParameterDescriptor descriptor)
         {
-            try
+            descriptor.Validate(item);
+            if (descriptor.IsArray)
             {
-                if (descriptor.IsArray)
+                Array av;
+                if (item is VMArray array)
                 {
-                    Array av;
-                    if (item is VMArray array)
-                    {
-                        av = Array.CreateInstance(descriptor.Type.GetElementType(), array.Count);
-                        for (int i = 0; i < av.Length; i++)
-                            av.SetValue(descriptor.Converter(array[i]), i);
-                    }
-                    else
-                    {
-                        int count = (int)item.GetInteger();
-                        if (count > Limits.MaxStackSize) throw new InvalidOperationException();
-                        av = Array.CreateInstance(descriptor.Type.GetElementType(), count);
-                        for (int i = 0; i < av.Length; i++)
-                            av.SetValue(descriptor.Converter(Pop()), i);
-                    }
-                    return av;
+                    av = Array.CreateInstance(descriptor.Type.GetElementType(), array.Count);
+                    for (int i = 0; i < av.Length; i++)
+                        av.SetValue(descriptor.Converter(array[i]), i);
                 }
                 else
                 {
-                    object value = descriptor.Converter(item);
-                    if (descriptor.IsEnum)
-                        value = Enum.ToObject(descriptor.Type, value);
-                    else if (descriptor.IsInterface)
-                        value = ((InteropInterface)value).GetInterface<object>();
-                    return value;
+                    int count = (int)item.GetInteger();
+                    if (count > Limits.MaxStackSize) throw new InvalidOperationException();
+                    av = Array.CreateInstance(descriptor.Type.GetElementType(), count);
+                    for (int i = 0; i < av.Length; i++)
+                        av.SetValue(descriptor.Converter(Pop()), i);
                 }
+                return av;
             }
-            catch (Exception e)
+            else
             {
-                Console.WriteLine(e);
-                throw;
+                object value = descriptor.Converter(item);
+                if (descriptor.IsEnum)
+                    value = Enum.ToObject(descriptor.Type, value);
+                else if (descriptor.IsInterface)
+                    value = ((InteropInterface)value).GetInterface<object>();
+                return value;
             }
-          
         }
 
         public override void Dispose()
